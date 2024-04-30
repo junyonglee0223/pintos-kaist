@@ -3,6 +3,14 @@
 #include <stdbool.h>
 #include "threads/palloc.h"
 
+//vm 추가 사항
+#include <hash.h>
+
+struct list lru;
+struct lock lru_lock;
+struct lock kill_lock;
+
+
 enum vm_type {
 	/* page not initialized */
 	VM_UNINIT = 0,
@@ -46,6 +54,11 @@ struct page {
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
+	//vm
+	size_t page_read_bytes;
+	struct hash_elem page_elem;
+	bool writable;
+	bool copy_writable;
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -63,6 +76,8 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
+	//vm
+	struct list_elem lru_elem;
 };
 
 /* The function table for page operations.
@@ -85,6 +100,7 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
+	struct hash spt;		//vm 수정사항
 };
 
 #include "threads/thread.h"
@@ -108,5 +124,14 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
 enum vm_type page_get_type (struct page *page);
+
+struct load_segment_aux
+{
+	struct file *file;
+	off_t ofs;
+	size_t page_read_bytes;
+	size_t page_zero_bytes;
+};
+
 
 #endif  /* VM_VM_H */

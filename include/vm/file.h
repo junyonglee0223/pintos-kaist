@@ -6,8 +6,30 @@
 struct page;
 enum vm_type;
 
+//vm mmap 관련 추가 구조체
 struct file_page {
+	struct page *page;
+
+	struct file *file;
+	void *start;
+	size_t length;
+	off_t ofs;
+
+	size_t page_read_bytes;
+	size_t page_zero_bytes;
+
+	struct list_elem file_elem;
 };
+
+struct mmap_aux{
+	struct file *file;
+	void *start;
+	size_t length;
+	off_t ofs;
+	size_t page_read_bytes;
+	size_t page_zero_bytes;
+};
+
 
 void vm_file_init (void);
 bool file_backed_initializer (struct page *page, enum vm_type type, void *kva);

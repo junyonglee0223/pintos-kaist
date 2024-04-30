@@ -151,6 +151,11 @@ struct thread {
 	
 	struct file *running;
 
+	//vm
+	uintptr_t user_rsp;
+	struct list mmap_list;
+	
+
 
 
 
