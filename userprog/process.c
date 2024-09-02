@@ -27,6 +27,10 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+//system call
+struct thread * get_child(int pid);
+
+
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -259,6 +263,9 @@ process_exec (void *f_name) {
 
 	/* We first kill the current context */
 	process_cleanup ();
+	#ifdef VM
+	supplemental_page_table_init(&thread_current()->spt);
+	#endif
 
 	/* And then load the binary */
 	success = load (file_name, &_if);
@@ -649,6 +656,19 @@ validate_segment (const struct Phdr *phdr, struct file *file) {
 	return true;
 }
 
+struct thread *get_child(int pid){
+	struct thread *cur = thread_current();
+	struct list *cur_child_list = &cur->child_list;
+	struct list_elem *e;
+	for(e = list_begin(cur_child_list); e != list_end(cur_child_list); e = list_next(e)){
+		struct thread *now = list_entry(e, struct thread, chlid_elem);
+		if(now->tid == pid)
+			return now;
+	}
+	return NULL;
+}
+
+
 #ifndef VM
 /* Codes of this block will be ONLY USED DURING project 2.
  * If you want to implement the function for whole project 2, implement it
@@ -748,83 +768,115 @@ install_page (void *upage, void *kpage, bool writable) {
 	return (pml4_get_page (t->pml4, upage) == NULL
 			&& pml4_set_page (t->pml4, upage, kpage, writable));
 }
+
+
+
+/*********************************vm project 3*********************************/
 #else
 /* From here, codes will be used after project 3.
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
+struct lock* filesys_lock;
 
 static bool
-lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: Load the segment from the file */
-	/* TODO: This called when the first page fault occurs on address VA. */
-	/* TODO: VA is available when calling this function. */
-}
+lazy_load_segment(struct page *page, void *aux)
+{
+    /* TODO: Load the segment from the file */
+    /* TODO: This called when the first page fault occurs on address VA. */
+    /* TODO: VA is available when calling this function. */
+    bool success = true;
+    struct load_segment_aux *info = (struct load_segment_aux *)aux;
+    if (file_read_at(info->file, page->va, info->page_read_bytes, info->ofs) != (off_t)info->page_read_bytes)
+    {
+        vm_dealloc_page(page);
+        success = false;
+    }
+    else
+    {
+        memset((page->va) + info->page_read_bytes, 0, info->page_zero_bytes);
+    }
 
-/* Loads a segment starting at offset OFS in FILE at address
- * UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
- * memory are initialized, as follows:
- *
- * - READ_BYTES bytes at UPAGE must be read from FILE
- * starting at offset OFS.
- *
- * - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
- *
- * The pages initialized by this function must be writable by the
- * user process if WRITABLE is true, read-only otherwise.
- *
- * Return true if successful, false if a memory allocation error
- * or disk read error occurs. */
+    file_close(info->file);
+    free(aux);
+    return success;
+}
 static bool
-load_segment (struct file *file, off_t ofs, uint8_t *upage,
-		uint32_t read_bytes, uint32_t zero_bytes, bool writable) {
-	ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
-	ASSERT (pg_ofs (upage) == 0);
-	ASSERT (ofs % PGSIZE == 0);
+load_segment(struct file *file, off_t ofs, uint8_t *upage,
+             uint32_t read_bytes, uint32_t zero_bytes, bool writable)
+{
+    ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
+    ASSERT(pg_ofs(upage) == 0);
+    ASSERT(ofs % PGSIZE == 0);
 
-	while (read_bytes > 0 || zero_bytes > 0) {
-		/* Do calculate how to fill this page.
-		 * We will read PAGE_READ_BYTES bytes from FILE
-		 * and zero the final PAGE_ZERO_BYTES bytes. */
-		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-		size_t page_zero_bytes = PGSIZE - page_read_bytes;
+    off_t dynamic_ofs = ofs;
+    while (read_bytes > 0 || zero_bytes > 0)
+    {
+        /* Do calculate how to fill this page.
+         * We will read PAGE_READ_BYTES bytes from FILE
+         * and zero the final PAGE_ZERO_BYTES bytes. */
+        size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+        size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: Set up aux to pass information to the lazy_load_segment. */
-		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
-			return false;
+        /* TODO: Set up aux to pass information to the lazy_load_segment. */
+        struct load_segment_aux *aux = (struct load_segment_aux *)malloc(sizeof(struct load_segment_aux));
+        lock_acquire(&filesys_lock);
+        aux->file = file_reopen(file);
+        lock_release(&filesys_lock);
+        aux->ofs = dynamic_ofs;
+        aux->page_read_bytes = page_read_bytes;
+        aux->page_zero_bytes = page_zero_bytes;
 
-		/* Advance. */
-		read_bytes -= page_read_bytes;
-		zero_bytes -= page_zero_bytes;
-		upage += PGSIZE;
-	}
-	return true;
+        if (!vm_alloc_page_with_initializer(VM_ANON, upage,
+                                            writable, lazy_load_segment, (void *)aux))
+        {
+            file_close(aux->file);
+            free(aux);
+            return false;
+        }
+
+        /* Advance. */
+        read_bytes -= page_read_bytes;
+        zero_bytes -= page_zero_bytes;
+        upage += PGSIZE;
+        dynamic_ofs += PGSIZE;
+    }
+    return true;
 }
-
 /* Create a PAGE of stack at the USER_STACK. Return true on success. */
 static bool
-setup_stack (struct intr_frame *if_) {
-	bool success = false;
-	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
+setup_stack(struct intr_frame *if_)
+{
+    bool success = false;
+    void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE);
 
-	/* TODO: Map the stack on stack_bottom and claim the page immediately.
-	 * TODO: If success, set the rsp accordingly.
-	 * TODO: You should mark the page is stack. */
-	/* TODO: Your code goes here */
+    /* TODO: Map the stack on stack_bottom and claim the page immediately.
+     * TODO: If success, set the rsp accordingly.
+     * TODO: You should mark the page is stack. */
+    /* TODO: Your code goes here */
+    success = vm_alloc_page(VM_ANON, stack_bottom, true);
+    if (success)
+    {
+        struct page *pg = spt_find_page(&thread_current()->spt, stack_bottom);
 
-	return success;
+        if (vm_claim_page(stack_bottom))
+            if_->rsp = (uintptr_t)USER_STACK;
+    }
+
+    return success;
 }
+
 #endif /* VM */
 
-struct thread *get_child(int pid){
-	struct thread *cur = thread_current();
-	struct list *cur_child_list = &cur->child_list;
-	struct list_elem *e;
-	for(e = list_begin(cur_child_list); e != list_end(cur_child_list); e = list_next(e)){
-		struct thread *now = list_entry(e, struct thread, chlid_elem);
-		if(now->tid == pid)
-			return now;
-	}
-	return NULL;
-}
+
+
+// struct thread *get_child(int pid){
+// 	struct thread *cur = thread_current();
+// 	struct list *cur_child_list = &cur->child_list;
+// 	struct list_elem *e;
+// 	for(e = list_begin(cur_child_list); e != list_end(cur_child_list); e = list_next(e)){
+// 		struct thread *now = list_entry(e, struct thread, chlid_elem);
+// 		if(now->tid == pid)
+// 			return now;
+// 	}
+// 	return NULL;
+// }

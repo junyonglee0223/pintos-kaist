@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "hash.h": "c",
+        "uninit.h": "c",
+        "anon.h": "c",
+        "process.h": "c",
+        "vm.h": "c",
+        "thread.h": "c"
+    }
+}

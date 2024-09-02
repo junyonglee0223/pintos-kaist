@@ -120,7 +120,7 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 	if(hash_insert(&(spt->spt), &(page->page_elem)) == NULL)
 		succ = true;
 	//hash_insert에서 NULL이 아니면 이미 key값이 있어서 재할당이 들어간다.
-	//즉 NULL일 경우 성공적인 insert이다. 
+	//즉 NULL일 경우 성공적인 insert이다.
 	return succ;
 }
 
@@ -230,7 +230,7 @@ vm_handle_wp (struct page *page UNUSED) {
 bool
 vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+	struct supplemental_page_table *spt UNUSED = &thread_current()->spt;
 	struct page *page = NULL;
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
@@ -248,6 +248,15 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 		}
 		return false;
 	}
+	
+	// printf("page->writable : %d\n", page->writable);
+	// printf("write : %d\n", write);
+	// printf("EQUALS ? : %d\n", page->writable == write);
+	// if (is_writable(thread_current()->pml4) && write)
+	// {
+	// 	printf("wp\n");
+	// 	return vm_handle_wp(page);
+	// };
 
 	if(write && !page->writable)return false;
 	if(vm_do_claim_page(page))return true;
